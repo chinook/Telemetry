@@ -1,0 +1,5 @@
+# Keep cmake-defaults script
+!src/**/*.cmake
+
+# Keep InfluxDB-cxx cmake scripts
+!influxdb-cxx/**/*.cmake

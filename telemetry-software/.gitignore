@@ -1,0 +1,16 @@
+
+a.out
+*.out
+eclipse_telemetry
+.DS_Store
+
+*.cmake
+Makefile
+CMakeCache.txt
+CMakeFiles/*
+
+# Visual Studio Code settings
+.vscode
+
+# Jetbrains IDE project files
+.idea

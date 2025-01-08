@@ -1,0 +1,271 @@
+
+#include "CanDecoder.hpp"
+#include <cstring>
+
+//
+// CanDecoder public interface
+//
+
+RawDataCanDecoder::RawDataCanDecoder()
+{
+}
+
+RawDataCanDecoder::~RawDataCanDecoder()
+{
+}
+
+std::vector<DecodedCanValue> RawDataCanDecoder::Process(const std::array<uint8_t, SERIAL_READ_SIZE>& raw_data, size_t size)
+{
+  // Insert read data into all data main buffer
+  buffer.insert(buffer.end(), raw_data.begin(), raw_data.begin() + size);
+  int new_index = index + size;
+
+  // Process buffer and look for headers 0xAA55
+  // The following for loop goes over all received bytes looking for a
+  // stating header (0xAA55)
+  //
+  // It is important to note that received bytes could have started at any
+  // point in a frame (in the middle for instance)
+  // To account for this, we skip the first instance of the header and only
+  // process subsequent headers because they indicate a valid frame interval
+  // Here is an example of the problem :
+  //
+  // start: [4 bytes] [0xAA55] [15 bytes] [0xAA55]
+  //
+  // We may have only received the 4 last bytes of a frame when we encounter first 0xAA55
+  // However, when the second is encountered, we can be sure there is a valid frame
+  // between the two headers (which we then process)
+  //
+  // Note that this does NOT mean frames are dropped when they are split by the
+  // serial transmission. Remember that received buffers are combined into a global
+  // static buffer, but this is more reliable and needed for first receive.
+  //
+  std::vector<CanFrame> can_frames;
+  int last_header_index = 0;
+  int header_count = 0;
+  for (int i = 0; i < (new_index - 1); ++i)
+  {
+    if (buffer[i] == static_cast<uint8_t>(0xAA) &&
+        buffer[i+1] == static_cast<uint8_t>(0x55))
+    {
+      // Ignore the first header instance
+      // Second and more headers are processed
+      if (header_count++ > 0)
+      {
+        // All messages must be of length 15
+        // [header = 2] [id = 4] [data = 8] [CRC = 1] = 15
+        size_t message_length = static_cast<size_t>(i - last_header_index);
+        if (message_length != sizeof(CanFrame))
+        {
+          std::cout << "CAN frame received was not of size 15, size = " << message_length << std::endl;
+          ++amt_msg_wrong_length;
+        }
+	else
+	{
+	  // Message is 15 bytes long (valid)
+	  // Decode into a can frame
+	  CanFrame frame;
+	  std::memcpy(&frame, &buffer[last_header_index], sizeof(CanFrame));
+	  can_frames.push_back(frame);
+	}
+      }
+      
+      last_header_index = i;
+    }
+  }
+
+  // Process the can messages into key-value pairs (signal name -> value)
+  std::vector<DecodedCanValue> decoded_values;
+  for (const CanFrame& frame : can_frames)
+    ProcessMessage(frame, decoded_values);
+
+  // Erase any frames prior to latest header
+  buffer.erase(buffer.begin(), buffer.begin() + last_header_index);
+  index = new_index - last_header_index;
+  
+  return decoded_values;
+}
+
+
+//
+// CanDecoder private decode functions
+//
+
+// ID in the format of 4 bytes is parsed into a proper uint32_t
+uint32_t RawDataCanDecoder::ConvertID(const std::array<uint8_t, 4>& data)
+{
+  uint32_t x = 0;
+  x |= (uint32_t)(data[0]) << 24;
+  x |= (uint32_t)(data[1]) << 16;
+  x |= (uint32_t)(data[2]) << 8;
+  x |= (uint32_t)(data[3]);
+  return x;
+}
+
+void RawDataCanDecoder::ProcessSignal(const SignalDecode& sig_dec,
+				     const std::array<uint8_t, 8>& data,
+				     std::vector<DecodedCanValue>& signal_values)
+{
+  uint32_t byte_pos = sig_dec.byte_pos;
+  uint32_t size = sig_dec.size;
+  uint8_t endianness = sig_dec.endianness;
+    
+  const uint8_t* signal_ptr = &data[byte_pos];
+  uint8_t signal_data[4];
+  memcpy(signal_data, signal_ptr, size);
+    
+  union TypeUnion
+  {
+    uint8_t  u8;
+    uint16_t u16;
+    uint32_t u32;
+    
+    float f32;
+    
+    int8_t  i8;
+    int16_t i16;
+    int32_t i32;
+  };
+  TypeUnion type_desc;
+  memcpy(&type_desc, signal_data, size);
+
+  // Swap endianness only if incoming message is big endian
+  if (endianness == B_ENDIAN)
+  {
+    switch (sig_dec.type)
+    {
+    case TYPE_uint32_t:
+    case TYPE_int32_t:
+    case TYPE_float:
+    {
+      type_desc.u32 = SWAP32(type_desc.u32);
+      break;
+    }
+        
+    case TYPE_uint16_t:
+    case TYPE_int16_t:
+    {
+      type_desc.u16 = SWAP16(type_desc.u16);
+      break;
+    }
+        
+    default: break;
+    }
+  }
+    
+  float value = 0;
+  switch (sig_dec.type)
+  {
+  case TYPE_float: value = type_desc.f32; break;
+            
+  case TYPE_uint32_t: value = (float)(type_desc.u32); break;
+  case TYPE_uint16_t: value = (float)(type_desc.u16); break;
+  case TYPE_uint8_t:  value = (float)(type_desc.u8);  break;
+            
+  case TYPE_int32_t: value = (float)(type_desc.i32); break;
+  case TYPE_int16_t: value = (float)(type_desc.i16); break;
+  case TYPE_int8_t:  value = (float)(type_desc.i8);  break;
+            
+  default: break;
+  }
+  
+  // Mutliply signal value by factor
+  value *= sig_dec.multiplier;
+  
+  // Write signal value in output vector
+  signal_values.push_back({ std::make_pair(std::string(sig_dec.name), value) });
+  // std::cout << value << std::endl;
+}
+
+
+void RawDataCanDecoder::ProcessMessage(const CanFrame& frame,
+				      std::vector<DecodedCanValue>& signal_values)
+{ 
+  uint8_t crc = CRC::GetCRC(std::vector<uint8_t>(frame.message.begin(),
+						 frame.message.end()));
+  // if (crc == frame.crc)
+  {
+    // Message is valid so we process its signal
+    // Id with correct endianness
+    uint32_t identifier = SWAP32(ConvertID(frame.id));
+
+    // Get CAN bus decoding information for the id
+    MessageDecode can_decode;
+    try
+    {
+      can_decode = CAN_DECODE.at(identifier);
+    }
+    catch (std::range_error& e)
+    {
+      std::cout << "UNKNOWN CAN ID : " << std::hex << identifier << std::dec << std::endl;
+      ++amt_msg_unknown_id;
+      return;
+    }
+
+    // CRC and ID are valid, process the signals
+    // All signal values are decoded as key-value pairs of <name, value>
+    // and appended into the vector passed as input
+    // std::cout << "num signals = " << can_decode.num_signals << std::endl;
+    for (uint32_t sig = 0; sig < can_decode.num_signals; ++sig)
+    {
+      SignalDecode signal_decode = can_decode.signals[sig];
+      ProcessSignal(signal_decode, frame.data, signal_values);
+    }
+    
+    // Increment some logging information about decoding rate
+    ++msg_count[can_decode.id];
+    msg_bytes += sizeof(frame); // Already verified at 15 bytes
+    ++amt_total_msgs;
+  }
+  /*
+  else
+  {
+    // CAN frame has invalid CRC
+    ++amt_msg_wrong_crc;
+  }
+  */
+}
+
+
+//
+// EmulateCanDecoder
+//
+//
+// Useful when no serial transmission is available
+// Outputs random values
+//
+
+EmulateCanDecoder::EmulateCanDecoder()
+{
+  srand(666);
+}
+
+EmulateCanDecoder::~EmulateCanDecoder()
+{
+}
+
+std::vector<DecodedCanValue> EmulateCanDecoder::Process(const std::array<uint8_t, SERIAL_READ_SIZE>& raw_data, size_t size)
+{
+  std::vector<DecodedCanValue> values;
+  for (auto it = CAN_MESSAGES.begin(); it != CAN_MESSAGES.end(); ++it)
+  {
+    MessageDecode message = it->second;
+    for (int i = 0; i < message.num_signals; ++i)
+    {
+      SignalDecode signal = message.signals[i];
+      std::string meas_name = std::string(signal.name);
+      float value = static_cast<float>(rand() % 1000) / 10.0f;
+      //float value = 10.0f;
+      
+      values.push_back({ std::make_pair(meas_name, value) });
+    }
+    
+    // Increase amount of bytes / messages processed
+    amt_msg_bytes += 15;
+    ++amt_total_msgs;
+    ++msg_count[message.id];
+  }
+  values.push_back({ std::make_pair("S_TEST_BITFIELD", int(4095)) });
+  
+  return values;
+}
