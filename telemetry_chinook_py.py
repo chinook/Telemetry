@@ -1,19 +1,28 @@
 import serial
 import struct
-
-import serial
-import struct
 import time
 
-# Open the UART serial port (on the Raspberry Pi)
-ser = serial.Serial(
-    port='/dev/serial0',  # This is for GPIO 14 (TX) and GPIO 15 (RX)
-    baudrate=115200,
-    bytesize=serial.EIGHTBITS,
-    parity=serial.PARITY_NONE,
-    stopbits=serial.STOPBITS_ONE,
-    timeout=1  # Timeout for reading (1 second)
-)
+def open_serial():
+    """Attempts to open the serial port with retry logic."""
+    while True:
+        try:
+            # Attempt to open the serial port
+            ser = serial.Serial(
+                port='/dev/serial0',  # Change if necessary
+                baudrate=115200,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=1  # Timeout for reading (1 second)
+            )
+            print("Serial port opened successfully.")
+            return ser
+        except serial.SerialException:
+            print("Serial port not available. Retrying in 3 seconds...")
+            time.sleep(3)
+
+# Open the UART serial port
+ser = open_serial()
 
 print("Waiting for data...")
 
