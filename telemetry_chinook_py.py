@@ -1,4 +1,16 @@
 import serial
+
+# Open the serial port (replace ttyAMA0 with the correct port if needed)
+ser = serial.Serial('/dev/ttyAMA0', 115200, timeout=1)
+
+while True:
+    if ser.in_waiting > 0:
+        data = ser.read(4)  # Read 4 bytes of data (adjust this based on your expected data)
+        print(f"Received data: {data}")
+
+
+"""
+import serial
 import struct
 import time
 
@@ -42,4 +54,5 @@ while True:
         print("No data received yet...")
     
     # Optional: Sleep to avoid constant polling and reduce CPU usage
-    time.sleep(0.1)
+    time.sleep(0.1)"
+"""
