@@ -15,7 +15,7 @@ import struct
 import time
 
 def open_serial():
-    """Attempts to open the serial port with retry logic."""
+    #Attempts to open the serial port with retry logic.
     while True:
         try:
             # Attempt to open the serial port
