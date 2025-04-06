@@ -8,7 +8,7 @@ def open_serial():
         try:
             # Attempt to open the serial port
             ser = serial.Serial(
-                port='/dev/serial0',  # Change if necessary
+                port='/dev/ttyAMA0',  # Change if necessary
                 baudrate=115200,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
